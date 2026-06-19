@@ -21,7 +21,8 @@ BOOT_CFLAGS := -target x86_64-unknown-windows \
                -mno-red-zone \
                -fshort-wchar \
                -I$(INCLUDE_DIR) \
-               -DHELIOS_BOOT
+               -DHELIOS_BOOT \
+               -mno-stack-arg-probe
 
 ifeq ($(DEBUG),1)
     BOOT_CFLAGS += -g -O0 -DHELIOS_DEBUG
