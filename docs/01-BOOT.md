@@ -177,7 +177,7 @@ After `ExitBootServices()`, the bootloader transfers control with the following 
 
 | Register / State | Value |
 |-----------------|-------|
-| `RDI` | Physical address of `boot_info_t` |
+| `RCX` | Physical address of `boot_info_t` (MS x64 ABI; `entry.asm` bridges to SysV) |
 | `RSI` | 0 (reserved for future use) |
 | CPU Mode | 64-bit long mode (already set by UEFI) |
 | Paging | UEFI identity mapping still active |

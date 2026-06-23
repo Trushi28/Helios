@@ -4,7 +4,7 @@
  *
  * This is the ONLY data channel between the bootloader and the kernel.
  * The bootloader populates this structure and passes its physical address
- * to kernel_entry in RDI.
+ * to kernel_entry in RCX (UEFI uses the Microsoft x64 calling convention).
  */
 
 #ifndef HELIOS_BOOT_INFO_H

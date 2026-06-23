@@ -44,8 +44,18 @@ $(KERNEL_ELF): $(ASM_OBJ) $(C_OBJ)
 	$(LD) $(LDFLAGS_KERNEL) -o $@ $^
 
 # ── Convert to flat binary ──────────────────────────────────────────────────
+# --set-section-flags .bss=alloc,load,contents: Forces objcopy to emit
+#   the .bss section as zero-filled data in the flat binary, so the file
+#   size reflects the FULL kernel footprint (.text + .rodata + .data + .bss).
+#   Without this, the bootloader's file_size-based allocation would only
+#   cover initialized sections, leaving .bss (kernel stack, bootstrap page
+#   tables) overlapping with memory that UEFI reports as EfiConventionalMemory.
+# --gap-fill 0: Fills any inter-section alignment gaps with zeros.
 $(KERNEL_BIN): $(KERNEL_ELF)
-	$(OBJCOPY) -O binary $< $@
+	$(OBJCOPY) -O binary \
+		--set-section-flags .bss=alloc,load,contents \
+		--gap-fill 0 \
+		$< $@
 
 clean:
 	rm -rf $(KERNEL_BUILD)

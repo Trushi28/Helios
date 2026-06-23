@@ -9,7 +9,7 @@
  *   4. Locates the ACPI RSDP and SMBIOS from the EFI Configuration Table
  *   5. Populates a boot_info_t structure
  *   6. Calls ExitBootServices()
- *   7. Jumps to kernel_entry with boot_info_t* in RDI
+ *   7. Jumps to kernel_entry with boot_info_t* in RCX (MS x64 ABI)
  *
  * No UEFI headers — we define the minimal structures inline to avoid
  * external dependencies.
@@ -473,7 +473,16 @@ EFI_STATUS efi_main(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *system_table) {
     EFI_FILE_INFO *finfo = (EFI_FILE_INFO *)file_info_buf;
     UINTN kernel_size = finfo->file_size;
 
-    /* Allocate pages for the kernel */
+    /* Allocate pages for the kernel image.
+     *
+     * KERNEL.BIN is produced by objcopy with --set-section-flags
+     * .bss=alloc,load,contents, so the file already includes the .bss
+     * footprint (kernel stack + bootstrap page tables) as zero-filled
+     * data.  The file_size therefore reflects the FULL kernel image
+     * (.text + .rodata + .data + .bss).  We allocate based on that
+     * size so the entire kernel memory footprint is reserved as
+     * EFI_LOADER_DATA and will never be reported as free memory to
+     * the PMM. */
     UINTN kernel_pages = (kernel_size + 4095) / 4096;
     uint64_t kernel_phys = 0;
     status = bs->allocate_pages(ALLOCATE_ANY_PAGES, EFI_LOADER_DATA,
@@ -492,6 +501,16 @@ EFI_STATUS efi_main(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *system_table) {
     }
     kernel_file->close(kernel_file);
     root_dir->close(root_dir);
+
+    /* Zero any trailing bytes in the last page beyond what the file
+     * contained.  This is a belt-and-suspenders safety measure: the
+     * flat binary already includes zero-filled .bss, but we ensure the
+     * page-aligned tail is clean regardless. */
+    UINTN allocated_bytes = kernel_pages * 4096;
+    if (allocated_bytes > kernel_size) {
+        memset((void *)(kernel_phys + kernel_size), 0,
+               allocated_bytes - kernel_size);
+    }
 
     boot_info->kernel.phys_base    = kernel_phys;
     boot_info->kernel.size         = kernel_size;
@@ -583,7 +602,8 @@ EFI_STATUS efi_main(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *system_table) {
     typedef void (*kernel_entry_fn)(boot_info_t *);
     kernel_entry_fn entry = (kernel_entry_fn)(kernel_phys + boot_info->kernel.entry_offset);
 
-    /* RDI = boot_info pointer (SysV ABI first argument) */
+    /* RCX = boot_info pointer (Microsoft x64 ABI — UEFI calling convention).
+     * entry.asm bridges to SysV by doing: mov r15, rcx */
     entry(boot_info);
 
     /* Should never reach here */

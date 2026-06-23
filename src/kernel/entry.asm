@@ -4,10 +4,11 @@
 
 	; Called by the UEFI bootloader after ExitBootServices().
 	; CPU state on entry:
-	; RDI = physical address of boot_info_t
-	; RSI = 0 (reserved)
-	; Mode: 64-bit long mode, paging active (UEFI identity map)
-	; Interrupts: disabled (CLI)
+	;   RCX = physical address of boot_info_t  (Microsoft x64 ABI — UEFI
+	;          calling convention passes the first argument in RCX, NOT RDI)
+	;   RSI = 0 (reserved)
+	;   Mode: 64-bit long mode, paging active (UEFI identity map)
+	;   Interrupts: disabled (CLI)
 
 	; The kernel is linked at KERNEL_VMA (high canonical half, see kernel.ld) but
 	; is loaded by the bootloader as a flat binary at an arbitrary LOW physical
