@@ -1,14 +1,14 @@
 	; ═══════════════════════════════════════════════════════════════════════════════
 	; Helios Kernel Entry Point
 	; ═══════════════════════════════════════════════════════════════════════════════
-	
+
 	; Called by the UEFI bootloader after ExitBootServices().
 	; CPU state on entry:
 	; RDI = physical address of boot_info_t
 	; RSI = 0 (reserved)
 	; Mode: 64-bit long mode, paging active (UEFI identity map)
 	; Interrupts: disabled (CLI)
-	
+
 	; The kernel is linked at KERNEL_VMA (high canonical half, see kernel.ld) but
 	; is loaded by the bootloader as a flat binary at an arbitrary LOW physical
 	; address. UEFI's page tables only map physical/identity memory — there is
@@ -18,7 +18,7 @@
 	; materializes that address as the link-time HIGH VMA, not a RIP-relative
 	; runtime address. The very first such access (gdt_install's `lgdt`) faults
 	; with #PF because that high VMA has no page-table entry yet.
-	
+
 	; This stub therefore, in order:
 	; 1. Stashes boot_info_t* in r15 (callee-saved — survives the stack
 	; switch below; the previous push/pop pair straddled two different
@@ -35,7 +35,7 @@
 	; 4. Switches to the high-half kernel stack.
 	; 5. Installs GDT, IDT (now safe — the high VMA they touch is mapped).
 	; 6. Calls kernel_main(boot_info_t *boot_info).
-	
+
 	; NOTE: This bootstrap mapping is intentionally coarse (present+writable
 	; only, no W^X split, no NX) and only needs to cover what Phase 0 touches.
 	; The real per-region SASOS mapping is built later by vmm_init_sasos()
@@ -69,7 +69,7 @@ kernel_entry:
 	;   r15 is preserved across the C calls below (SysV ABI) and survives
 	;   the RSP switch, unlike push-before/pop-after-switch which reads
 	;   back from a different (uninitialized) stack.
-	mov r15, rdi
+	mov r15, rcx
 
 	;    ── Build bootstrap page tables and load CR3 ─────────────────────────
 	call early_paging_setup
