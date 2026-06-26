@@ -4,7 +4,7 @@
 
 include config.mk
 
-.PHONY: all boot kernel image run debug clean help
+.PHONY: all boot kernel image run debug clean help test-unit
 
 # ── Default target ───────────────────────────────────────────────────────────
 all: image
@@ -40,18 +40,23 @@ debug: image
 clean:
 	rm -rf $(BUILD_DIR)
 
+# ── Unit tests (run on host) ─────────────────────────────────────────────
+test-unit:
+	$(MAKE) -C tests/unit run
+
 # ── Help ─────────────────────────────────────────────────────────────────────
 help:
 	@echo "Helios OS Build System"
 	@echo ""
 	@echo "Targets:"
-	@echo "  all       Build everything (default)"
-	@echo "  boot      Build UEFI bootloader"
-	@echo "  kernel    Build kernel"
-	@echo "  image     Build disk image (GPT + ESP)"
-	@echo "  run       Build and run in QEMU"
-	@echo "  debug     Build and run with GDB stub"
-	@echo "  clean     Remove all build artifacts"
+	@echo "  all        Build everything (default)"
+	@echo "  boot       Build UEFI bootloader"
+	@echo "  kernel     Build kernel"
+	@echo "  image      Build disk image (GPT + ESP)"
+	@echo "  run        Build and run in QEMU"
+	@echo "  debug      Build and run with GDB stub"
+	@echo "  test-unit  Run PMM unit tests on host"
+	@echo "  clean      Remove all build artifacts"
 	@echo ""
 	@echo "Options:"
 	@echo "  DEBUG=1   Debug build (default)"

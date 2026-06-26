@@ -47,6 +47,7 @@
 	section .text.entry
 
 	global kernel_entry
+	global kernel_stack_bottom
 	extern kernel_main
 	extern gdt_install
 	extern idt_install

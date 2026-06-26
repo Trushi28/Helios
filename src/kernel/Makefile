@@ -10,7 +10,9 @@ include ../../config.mk
 
 # ── Source discovery ─────────────────────────────────────────────────────────
 C_SRC := main.c serial.c string.c printf.c panic.c \
-         arch/x86_64/gdt.c arch/x86_64/idt.c
+         arch/x86_64/gdt.c arch/x86_64/idt.c \
+         mm/pmm.c mm/vmm.c mm/slab.c mm/capability.c \
+         crypto/sha256.c crypto/hmac.c crypto/random.c
 
 ASM_SRC := entry.asm arch/x86_64/idt_stubs.asm
 
@@ -28,6 +30,8 @@ all: $(KERNEL_BIN)
 $(KERNEL_BUILD):
 	mkdir -p $(KERNEL_BUILD)
 	mkdir -p $(KERNEL_BUILD)/arch/x86_64
+	mkdir -p $(KERNEL_BUILD)/mm
+	mkdir -p $(KERNEL_BUILD)/crypto
 
 # ── Compile C sources ───────────────────────────────────────────────────────
 $(KERNEL_BUILD)/%.o: %.c | $(KERNEL_BUILD)

@@ -10,6 +10,18 @@
 #ifndef HELIOS_TYPES_H
 #define HELIOS_TYPES_H
 
+#ifdef UNIT_TEST
+/* ═══════════════════════════════════════════════════════════════════════════ */
+/*  Host unit-test mode: use system headers for standard types to avoid       */
+/*  redefinition conflicts with <stdio.h>, <stdlib.h>, etc.                  */
+/* ═══════════════════════════════════════════════════════════════════════════ */
+#include <stdint.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <sys/types.h>   /* ssize_t */
+
+#else /* !UNIT_TEST — freestanding kernel mode */
+
 /* ═══════════════════════════════════════════════════════════════════════════ */
 /*  Integer types (freestanding — no <stdint.h> in kernel mode)              */
 /* ═══════════════════════════════════════════════════════════════════════════ */
@@ -46,6 +58,8 @@ typedef _Bool               bool;
 /* ═══════════════════════════════════════════════════════════════════════════ */
 
 #define NULL                ((void *)0)
+
+#endif /* UNIT_TEST */
 
 /* ═══════════════════════════════════════════════════════════════════════════ */
 /*  Physical / Virtual address types                                          */

@@ -106,7 +106,7 @@ echo ""
 # ── Launch QEMU ───────────────────────────────────────────────────────────
 exec qemu-system-x86_64 \
     -machine q35,accel=$ACCEL \
-    -cpu qemu64,+x2apic,+rdrand,+rdseed \
+    -cpu qemu64,+x2apic,+rdrand,+rdseed,+nx,+smep,+smap,+pcid \
     -smp cores=4,threads=1 \
     -m 512M \
     $PFLASH_ARGS \
