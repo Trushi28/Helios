@@ -10,7 +10,8 @@ extern void serial_puts(const char *s);
 extern NORETURN void panic(const char *msg);
 extern void *memset(void *dest, int val, size_t n);
 
-extern char kernel_stack_guard[];  /* dedicated, reserved guard page (entry.asm) */
+extern char
+    kernel_stack_guard[]; /* dedicated, reserved guard page (entry.asm) */
 extern char kernel_stack_bottom[];
 extern char __kernel_end[]; /* linker symbol — true end of BSS */
 
@@ -28,7 +29,7 @@ extern char __text_end[];
 extern char __rodata_start[];
 extern char __rodata_end[];
 extern char __data_start[];
-extern char __kernel_end[];    /* covers .data + .bss */
+extern char __kernel_end[]; /* covers .data + .bss */
 extern char kernel_stack_bottom[];
 
 static inline void *phys_to_virt_vmm(phys_addr_t phys) {
@@ -145,16 +146,19 @@ virt_addr_t vmm_heap_alloc_page(void) {
  * by drivers with UC (uncacheable) attributes via mmio_map_bar().
  */
 static bool phys_range_is_mmio(const helios_mem_entry_t *entries,
-                                uint64_t count,
-                                phys_addr_t base, uint64_t size) {
-    phys_addr_t end = base + size;
-    for (uint64_t i = 0; i < count; i++) {
-        uint32_t t = entries[i].type;
-        if (t != HELIOS_MEM_MMIO && t != HELIOS_MEM_RESERVED) continue;
-        phys_addr_t r_end = entries[i].phys_base + entries[i].page_count * PAGE_SIZE;
-        if (entries[i].phys_base < end && r_end > base) return true;
-    }
-    return false;
+                               uint64_t count, phys_addr_t base,
+                               uint64_t size) {
+  phys_addr_t end = base + size;
+  for (uint64_t i = 0; i < count; i++) {
+    uint32_t t = entries[i].type;
+    if (t != HELIOS_MEM_MMIO && t != HELIOS_MEM_RESERVED)
+      continue;
+    phys_addr_t r_end =
+        entries[i].phys_base + entries[i].page_count * PAGE_SIZE;
+    if (entries[i].phys_base < end && r_end > base)
+      return true;
+  }
+  return false;
 }
 
 void vmm_init_sasos(boot_info_t *boot_info) {
@@ -184,16 +188,16 @@ void vmm_init_sasos(boot_info_t *boot_info) {
    * Use linker symbols for section boundaries.
    * Compute phys = kernel_phys + (section_va - KERNEL_VMA) for each region. */
   uint64_t text_flags = PTE_PRESENT | PTE_GLOBAL;
-  uint64_t rodata_flags = PTE_PRESENT | PTE_GLOBAL |
-                          (g_nx_supported ? PTE_NO_EXECUTE : 0);
+  uint64_t rodata_flags =
+      PTE_PRESENT | PTE_GLOBAL | (g_nx_supported ? PTE_NO_EXECUTE : 0);
   uint64_t data_flags = PTE_PRESENT | PTE_WRITABLE | PTE_GLOBAL |
                         (g_nx_supported ? PTE_NO_EXECUTE : 0);
 
   /* .text — executable, not writable */
   uint64_t text_size = (uint64_t)__text_end - (uint64_t)__text_start;
   vmm_map_range((virt_addr_t)__text_start,
-                kernel_phys + ((uint64_t)__text_start - KERNEL_VMA),
-                text_size, text_flags);
+                kernel_phys + ((uint64_t)__text_start - KERNEL_VMA), text_size,
+                text_flags);
   serial_printf("  VMM: .text   [%p, %p) RX\n", __text_start, __text_end);
 
   /* .rodata — not writable, NX if available */
@@ -207,12 +211,13 @@ void vmm_init_sasos(boot_info_t *boot_info) {
   /* .data + .bss + stack — writable, NX if available */
   uint64_t data_size = (uint64_t)__kernel_end - (uint64_t)__data_start;
   vmm_map_range((virt_addr_t)__data_start,
-                kernel_phys + ((uint64_t)__data_start - KERNEL_VMA),
-                data_size, data_flags);
+                kernel_phys + ((uint64_t)__data_start - KERNEL_VMA), data_size,
+                data_flags);
   serial_printf("  VMM: .data   [%p, %p) RW%s\n", __data_start, __kernel_end,
                 g_nx_supported ? "+NX" : "");
 
-  uint64_t kernel_pages = ((uint64_t)__kernel_end - KERNEL_VMA + PAGE_SIZE - 1) / PAGE_SIZE;
+  uint64_t kernel_pages =
+      ((uint64_t)__kernel_end - KERNEL_VMA + PAGE_SIZE - 1) / PAGE_SIZE;
   serial_printf("  VMM: kernel mapped %lu pages at KERNEL_VMA 0x%lx (W^X)\n",
                 kernel_pages, (uint64_t)KERNEL_VMA);
 
@@ -240,16 +245,29 @@ void vmm_init_sasos(boot_info_t *boot_info) {
   uint64_t huge_page_count = total_phys_mem / PAGE_SIZE_2M;
   uint64_t direct_flags =
       PTE_PRESENT | PTE_WRITABLE | PTE_GLOBAL | PTE_HUGE_PAGE;
+  uint64_t direct_flags_4k = PTE_PRESENT | PTE_WRITABLE | PTE_GLOBAL;
   if (g_nx_supported) {
     direct_flags |= PTE_NO_EXECUTE;
+    direct_flags_4k |= PTE_NO_EXECUTE;
   }
 
   serial_printf("  VMM: direct map: %lu MiB (%lu x 2MiB pages)\n",
                 total_phys_mem / (1024 * 1024), huge_page_count);
 
+  uint64_t fallback_windows = 0;
   for (uint64_t i = 0; i < huge_page_count; i++) {
     phys_addr_t pa = i * PAGE_SIZE_2M;
-    if (phys_range_is_mmio(entries, entry_count, pa, PAGE_SIZE_2M)) continue;
+
+    if (phys_range_is_mmio(entries, entry_count, pa, PAGE_SIZE_2M)) {
+      fallback_windows++;
+      for (uint64_t off = 0; off < PAGE_SIZE_2M; off += PAGE_SIZE_4K) {
+        phys_addr_t page_pa = pa + off;
+        if (phys_range_is_mmio(entries, entry_count, page_pa, PAGE_SIZE_4K))
+          continue;
+        vmm_map_page(KERNEL_PHYS_MAP_BASE + page_pa, page_pa, direct_flags_4k);
+      }
+      continue;
+    }
     virt_addr_t va = KERNEL_PHYS_MAP_BASE + pa;
 
     phys_addr_t pdpt_phys =
@@ -262,6 +280,11 @@ void vmm_init_sasos(boot_info_t *boot_info) {
 
     uint64_t *pd = (uint64_t *)phys_to_virt_vmm(pd_phys);
     pd[PD_INDEX(va)] = (pa & PTE_ADDR_MASK) | direct_flags;
+  }
+  if (fallback_windows > 0) {
+    serial_printf("  VMM: direct map: %lu window(s) fell back to 4 KiB "
+                  "(partial MMIO/RESERVED overlap)\n",
+                  fallback_windows);
   }
   /* ── CR3 switch ──────────────────────────────────────────────────────
    * The kernel is executing from IDENTITY-MAPPED physical addresses
@@ -335,8 +358,10 @@ void vmm_init_sasos(boot_info_t *boot_info) {
    * The assertion below fails fast (at boot, on serial) if the two
    * symbols ever drift apart instead of silently unmapping the wrong
    * page again. */
-  if ((virt_addr_t)kernel_stack_guard + PAGE_SIZE != (virt_addr_t)kernel_stack_bottom) {
-    panic("VMM: kernel_stack_guard is not immediately below kernel_stack_bottom");
+  if ((virt_addr_t)kernel_stack_guard + PAGE_SIZE !=
+      (virt_addr_t)kernel_stack_bottom) {
+    panic(
+        "VMM: kernel_stack_guard is not immediately below kernel_stack_bottom");
   }
 
   g_guard_page_addr = (virt_addr_t)kernel_stack_guard;
