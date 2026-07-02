@@ -80,4 +80,7 @@ virt_addr_t vmm_get_guard_page_addr(void);
  */
 virt_addr_t vmm_heap_alloc_page(void);
 
+/** Returns true if the CPU supports and has enabled the NX bit (EFER.NXE = 1). */
+bool vmm_nx_supported(void);
+
 #endif /* HELIOS_VMM_H */

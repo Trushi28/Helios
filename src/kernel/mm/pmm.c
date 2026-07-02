@@ -714,12 +714,14 @@ void pmm_reclaim_acpi(void) {
       continue;
 
     phys_addr_t base = ALIGN_UP(entries[i].phys_base, PAGE_SIZE);
-    uint64_t n_pages = entries[i].page_count;
-    if (n_pages == 0)
+    phys_addr_t end = entries[i].phys_base + entries[i].page_count * PAGE_SIZE;
+    if (base >= end)
       continue;
 
-    g_pmm.total_pages += n_pages;
-    pmm_add_region(base, n_pages * PAGE_SIZE);
+    /* Use the exclusion helper to avoid overlapping with kernel/bitmap.
+     * pmm_add_range_excl_reserved handles total_pages accounting internally
+     * via pmm_free_pages, so we do NOT manually bump total_pages here. */
+    pmm_add_range_excl_reserved(base, end);
   }
 
   uint64_t reclaimed = g_pmm.free_pages - reclaimed_before;

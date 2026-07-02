@@ -12,6 +12,8 @@
 #include <helios/types.h>
 #include <helios/spinlock.h>
 
+#define SLAB_MAGIC 0x5AB5AB5AU
+
 /* Forward declaration */
 typedef struct slab slab_t;
 
@@ -19,6 +21,7 @@ typedef struct slab slab_t;
  * @brief A slab page header, stored at the start of each slab page.
  */
 struct slab {
+    uint32_t     magic;        /* SLAB_MAGIC — cross-cache detection */
     struct slab *next;
     uint32_t     free_count;
     uint32_t     obj_count;

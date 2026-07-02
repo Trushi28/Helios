@@ -28,7 +28,7 @@ extern int strcmp(const char *a, const char *b);
 /* ═══════════════════════════════════════════════════════════════════════════
  */
 
-#define MAX_CACHES 16
+#define MAX_CACHES 64
 
 static slab_cache_t g_caches[MAX_CACHES];
 static uint32_t g_cache_count = 0;
@@ -107,6 +107,9 @@ static slab_t *slab_create_new(slab_cache_t *cache) {
 
   /* Clear bitmap — 0 means free, 1 means allocated */
   memset(slab->free_bitmap, 0, bitmap_bytes);
+
+  /* Stamp the slab magic for cross-cache detection */
+  slab->magic = SLAB_MAGIC;
 
   return slab;
 }
@@ -243,6 +246,13 @@ void slab_free(slab_cache_t *cache, void *obj) {
   /* Determine which slab this object belongs to.
    * Slab header is at the start of the page containing the object. */
   slab_t *slab = (slab_t *)((uintptr_t)obj & PAGE_MASK);
+
+  /* Cross-cache detection: verify slab magic */
+  if (slab->magic != SLAB_MAGIC) {
+    spinlock_unlock(&cache->lock);
+    panic("SLAB: slab magic mismatch — cross-cache free or corruption");
+  }
+
   uint32_t idx = slab_obj_index(cache, slab, obj);
 
   if (idx == (uint32_t)-1) {
@@ -328,12 +338,20 @@ slab_cache_t *slab_get_cache(const char *name) {
 void slab_init(void) {
   g_cache_count = 0;
 
+  /* Phase 1 caches */
   slab_cache_create("cap_token", 48, 8);
-  slab_cache_create("microprogram", 512, 16);
   slab_cache_create("sched_node", 64, 8);
   slab_cache_create("graph_vertex", 128, 8);
   slab_cache_create("graph_edge", 64, 8);
   slab_cache_create("page_desc", 32, 8);
 
-  serial_printf("  SLAB: created %u pre-defined caches\n", g_cache_count);
+  /* Phase 2 caches */
+  slab_cache_create("microprogram", 1024, 16);
+  slab_cache_create("ipc_port", 128, 8);
+  slab_cache_create("ipc_message", 256, 8);
+  slab_cache_create("pcie_device", 512, 16);
+  slab_cache_create("nvme_cmd", 64, 8);
+  slab_cache_create("infer_req", 256, 16);
+
+  serial_printf("  SLAB: created %u caches\n", g_cache_count);
 }

@@ -7,6 +7,7 @@
  */
 
 #include <arch/x86_64/paging.h>
+#include <arch/x86_64/msr.h>
 #include <helios/types.h>
 
 /* Forward declarations */
@@ -87,8 +88,11 @@ extern void isr_29(void);
 extern void isr_30(void);
 extern void isr_31(void);
 
-/* Generic stub for vectors 32–255 */
-extern void isr_generic(void);
+/* Per-vector stub table for vectors 32–255 (generated in idt_stubs.asm) */
+extern void (*isr_irq_table[])(void);
+
+/* NX support query — defined in vmm.c */
+extern bool vmm_nx_supported(void);
 
 /* ═══════════════════════════════════════════════════════════════════════════
  */
@@ -235,7 +239,8 @@ void interrupt_dispatch(interrupt_frame_t *frame) {
           panic_with_frame("OOM on demand page", frame);
         }
         vmm_map_page(fault_addr & PAGE_MASK, p,
-                     PTE_PRESENT | PTE_WRITABLE | PTE_NO_EXECUTE);
+                     PTE_PRESENT | PTE_WRITABLE |
+                     (vmm_nx_supported() ? PTE_NO_EXECUTE : 0));
         return; /* Retry the faulting instruction */
       }
 
@@ -263,7 +268,60 @@ void interrupt_dispatch(interrupt_frame_t *frame) {
     panic_with_frame(exception_names[vector], frame);
   }
 
-  /* Vectors 32–255: not yet configured in Phase 1 */
+  /* Vectors 32–255: device interrupts, timer, IPIs */
+
+  /* Forward declarations for scheduler and APIC */
+  extern bool g_scheduler_online;
+  extern void scheduler_preempt(void);
+
+  /* Local EOI helper — writes directly to x2APIC EOI MSR (0x80B).
+   * We avoid including x2apic.h here since x2apic_eoi is static inline
+   * and a forward declaration would create a linker-unresolved reference. */
+  #define LOCAL_X2APIC_EOI() do { wrmsr(0x80B, 0); } while (0)
+
+  /* Timer vector — APIC timer fires scheduler preemption */
+  if (vector == 0x20) {
+    LOCAL_X2APIC_EOI();
+    if (g_scheduler_online) {
+      scheduler_preempt();
+    }
+    return;
+  }
+
+  /* IPI vectors 0xF0–0xF3 */
+  switch (vector) {
+  case 0xF0:  /* IPI_RESCHEDULE */
+    LOCAL_X2APIC_EOI();
+    /* No action needed — the idle loop will check queues on return */
+    return;
+
+  case 0xF1:  /* IPI_TLB_SHOOTDOWN */
+    LOCAL_X2APIC_EOI();
+    /* Reload CR3 to flush TLB */
+    write_cr3(read_cr3());
+    return;
+
+  case 0xF2:  /* IPI_HALT */
+    LOCAL_X2APIC_EOI();
+    cli();
+    for (;;) cpu_halt();
+    /* unreachable */
+
+  case 0xF3:  /* IPI_PANIC */
+    LOCAL_X2APIC_EOI();
+    serial_puts("  !!! IPI PANIC received — halting core !!!\n");
+    cli();
+    for (;;) cpu_halt();
+    /* unreachable */
+
+  case 0xFE:  /* Spurious vector */
+    /* Do NOT send EOI for spurious interrupts */
+    return;
+
+  default:
+    break;
+  }
+
   serial_printf("  Unexpected interrupt vector: 0x%02x\n",
                 (unsigned int)vector);
 }
@@ -307,14 +365,22 @@ void idt_install(void) {
       ist = 3; /* Machine Check → IST 3 */
     if (i == 0x01 || i == 0x03)
       ist = 4; /* Debug exceptions → IST 4 */
+    if (i == 0x0E)
+      ist = 5; /* Page Fault → IST 5 — #PF is how a kernel-stack overflow
+                * is first reported (the guard page below kernel_stack_bottom
+                * unmaps to a #PF). Without its own IST, delivering that very
+                * #PF requires pushing the exception frame onto the already-
+                * overflowed stack, which either corrupts adjacent memory or
+                * immediately re-faults. A dedicated stack lets the handler
+                * always run on known-good memory and produce a clean panic. */
 
     /* 0x8E = 64-bit Interrupt Gate, DPL=0, Present */
     idt_set_entry((uint8_t)i, (uint64_t)isr_stubs[i], 0x8E, ist);
   }
 
-  /* Install generic handler for vectors 32–255 */
+  /* Install per-vector handlers for vectors 32–255 */
   for (int i = 32; i < 256; i++) {
-    idt_set_entry((uint8_t)i, (uint64_t)isr_generic, 0x8E, 0);
+    idt_set_entry((uint8_t)i, (uint64_t)isr_irq_table[i - 32], 0x8E, 0);
   }
 
   /* Load IDT */

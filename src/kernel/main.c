@@ -2,9 +2,8 @@
  * @file main.c
  * @brief Helios kernel entry point — kernel_main().
  *
- * Initializes core subsystems and dumps boot information to serial.
- * This is the Phase 0 "Hello World" — proof that the UEFI bootloader
- * successfully loaded the kernel and transferred control.
+ * Initializes core subsystems: Phase 0 (serial/boot_info), Phase 1 (PMM/VMM/
+ * slab/capabilities), Phase 2 (ACPI/TSC/x2APIC/SMP/scheduler/syscall).
  */
 
 #include <helios/boot_info.h>
@@ -13,12 +12,22 @@
 #include <helios/slab.h>
 #include <helios/types.h>
 #include <helios/vmm.h>
+#include <helios/acpi/madt.h>
+#include <arch/x86_64/tsc.h>
+#include <arch/x86_64/x2apic.h>
+#include <helios/sched/per_core.h>
+#include <helios/scheduler.h>
+#include <helios/syscall.h>
+#include <helios/smp.h>
 
 /* Forward declarations */
 extern void serial_init(void);
 extern void serial_puts(const char *s);
 extern void serial_printf(const char *fmt, ...);
 extern NORETURN void panic(const char *msg);
+
+/* Phase 2 test suite */
+extern void phase2_test_run(void);
 
 /* Memory type names for pretty-printing */
 static const char *mem_type_names[] = {
@@ -183,9 +192,53 @@ NORETURN void kernel_main(boot_info_t *boot_info) {
   serial_puts("  Next: Phase 2 — SMP & Scheduler\n");
   serial_puts("  ════════════════════════════════════════════════════\n\n");
 
-  /* ── Idle halt loop ──────────────────────────────────────────────────── */
-  serial_puts("  Entering idle halt loop. Connect GDB or reset.\n\n");
-  for (;;) {
-    cpu_halt();
-  }
+  /* ══════════════════════════════════════════════════════════════════════ */
+  /*  Phase 2: SMP & Scheduler                                             */
+  /* ══════════════════════════════════════════════════════════════════════ */
+  serial_puts("  ── Phase 2: SMP & Scheduler ────────────────────────\n");
+
+  /* Step 1: Parse MADT — discover CPUs, I/O APICs, IRQ overrides */
+  madt_parse(boot_info->acpi.rsdp_phys);
+
+  /* Step 2: Calibrate TSC frequency */
+  tsc_calibrate();
+
+  /* Step 3: Enable x2APIC on BSP */
+  x2apic_init();
+
+  /* Step 4: Mark BSP in CPU table (needs x2apic_get_id) */
+  madt_mark_bsp();
+
+  /* Step 5: Initialize per-core data for BSP */
+  uint32_t bsp_apic_id = x2apic_get_id();
+  per_core_data_t *bsp_core = per_core_init(0, bsp_apic_id);
+  if (!bsp_core)
+    panic("Phase 2: BSP per_core_init failed");
+
+  /* Step 6: Set GS base for this_core() on BSP */
+  per_core_set_gsbase(bsp_core);
+
+  /* Step 7: Initialize BSP scheduler (creates idle thread, arms timer, sti) */
+  scheduler_init();
+
+  /* Step 8: Configure SYSCALL MSRs on BSP */
+  syscall_init();
+
+  /* Step 9: Boot APs (each AP runs: x2apic → gdt_install_ap_tss →
+   *         per_core → gsbase → syscall_init → scheduler_init_core → idle) */
+  smp_init();
+
+  /* Step 10: Run Phase 2 test suite */
+  phase2_test_run();
+
+  /* Phase 2 complete */
+  serial_puts("\n");
+  serial_puts("  ════════════════════════════════════════════════════\n");
+  serial_puts("  Phase 2 COMPLETE — SMP & scheduler online.\n");
+  serial_puts("  Next: Phase 3 — User-mode & IPC\n");
+  serial_puts("  ════════════════════════════════════════════════════\n\n");
+
+  /* ── Enter BSP scheduler idle loop — never returns ────────────────── */
+  scheduler_idle_loop();
 }
+

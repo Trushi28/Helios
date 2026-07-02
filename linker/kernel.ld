@@ -14,18 +14,24 @@ SECTIONS {
 
     /* ── Executable code ─────────────────────────────────────────────────── */
     .text ALIGN(4K) : AT(ADDR(.text) - KERNEL_VMA) {
+        __text_start = .;
         KEEP(*(.text.entry))     /* kernel_entry must be first */
         *(.text .text.*)
+        __text_end = .;
     }
 
     /* ── Read-only data ──────────────────────────────────────────────────── */
     .rodata ALIGN(4K) : AT(ADDR(.rodata) - KERNEL_VMA) {
+        __rodata_start = .;
         *(.rodata .rodata.*)
+        __rodata_end = .;
     }
 
     /* ── Initialized read-write data ─────────────────────────────────────── */
     .data ALIGN(4K) : AT(ADDR(.data) - KERNEL_VMA) {
+        __data_start = .;
         *(.data .data.*)
+        __data_end = .;
     }
 
     /* ── Uninitialized data (BSS) ────────────────────────────────────────── */

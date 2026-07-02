@@ -70,14 +70,39 @@ ISR_ERR   30   ; #SX Security Exception
 ISR_NOERR 31   ; (Reserved)
 
 ; ═══════════════════════════════════════════════════════════════════════════════
-; Generic ISR stub for vectors 32–255 (device interrupts, IPIs, etc.)
+; ISR stubs for device interrupts (vectors 32–255)
+; ═══════════════════════════════════════════════════════════════════════════════
+; Each stub pushes a dummy error code (0) and its actual vector number,
+; then jumps to isr_common for the full register save / C dispatch / iretq.
+
+%macro ISR_IRQ 1
+global isr_%1
+isr_%1:
+    push qword 0              ; Dummy error code (no error code for device IRQs)
+    push qword %1             ; Actual vector number
+    jmp isr_common
+%endmacro
+
+%assign i 32
+%rep 224
+    ISR_IRQ i
+    %assign i i+1
+%endrep
+
+; ═══════════════════════════════════════════════════════════════════════════════
+; ISR pointer table for vectors 32–255 (used by idt.c to install IDT entries)
 ; ═══════════════════════════════════════════════════════════════════════════════
 
-global isr_generic
-isr_generic:
-    push qword 0              ; Dummy error code
-    push qword 0xFF           ; Marker: "unknown/generic vector"
-    jmp isr_common
+section .rodata
+global isr_irq_table
+isr_irq_table:
+%assign i 32
+%rep 224
+    dq isr_%+i
+    %assign i i+1
+%endrep
+
+section .text
 
 ; ═══════════════════════════════════════════════════════════════════════════════
 ; Common ISR body

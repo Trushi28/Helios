@@ -47,7 +47,9 @@
 	section .text.entry
 
 	global kernel_entry
+	global kernel_stack_guard
 	global kernel_stack_bottom
+	global kernel_stack_top
 	extern kernel_main
 	extern gdt_install
 	extern idt_install
@@ -204,6 +206,33 @@ early_paging_setup:
 	;       Kernel Stack (64 KiB) and bootstrap page tables, all in BSS
 	;       ═══════════════════════════════════════════════════════════════════════════════
 	section .bss
+
+	;     ── Dedicated kernel-stack guard page ─────────────────────────────
+	;     This page is never read from or written to by any code — its sole
+	;     purpose is to occupy a known, exclusively-reserved address that
+	;     vmm_init_sasos() unmaps (see src/kernel/mm/vmm.c) so a kernel
+	;     stack overflow (RSP running below kernel_stack_bottom) faults on
+	;     a genuinely empty page.
+	;
+	;     Previously the guard page was computed as
+	;     "kernel_stack_bottom - PAGE_SIZE" with nothing actually reserved
+	;     there. Because entry.o is (and must remain) the first object on
+	;     the linker command line (src/kernel/Makefile, ASM_SRC), and
+	;     kernel_stack_bottom was the first symbol in this .bss, that
+	;     computed address landed exactly on __data_start — the page
+	;     holding live .data content such as panic.c's __stack_chk_guard.
+	;     Unmapping it corrupted the stack-protector canary for every
+	;     stack-protected function, producing a cascading, self-repeating
+	;     "KERNEL STACK OVERFLOW" fault loop instead of a clean panic.
+	;
+	;     By reserving this page explicitly (as opposed to inferring it
+	;     from the linker's incidental layout), it is guaranteed to never
+	;     alias any other symbol regardless of how large .data/.bss grow.
+	;     See docs/02-MEMORY.md, "Guard pages need truly reserved memory".
+	align 4096
+kernel_stack_guard:
+	resb 4096
+
 	align   16
 
 kernel_stack_bottom:

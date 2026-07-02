@@ -41,6 +41,10 @@ static bool g_cap_initialized = false;
  */
 
 #define REVOC_CAPACITY 4096u /* must be power of 2 */
+/* NOTE: Phase 3 will replace this static table with a dynamically
+ * growing hash table backed by slab-allocated pages. The 4096-entry
+ * limit is sufficient for Phase 2 but must not be carried forward
+ * into production. See docs/17-ROADMAP.md, Section 3.x. */
 #define REVOC_EMPTY 0u       /* slot is unused                */
 #define REVOC_DEAD 1u        /* tombstone (deleted entry)     */
 #define REVOC_LIVE 2u        /* active revoked nonce          */

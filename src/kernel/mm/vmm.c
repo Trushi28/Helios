@@ -10,6 +10,7 @@ extern void serial_puts(const char *s);
 extern NORETURN void panic(const char *msg);
 extern void *memset(void *dest, int val, size_t n);
 
+extern char kernel_stack_guard[];  /* dedicated, reserved guard page (entry.asm) */
 extern char kernel_stack_bottom[];
 extern char __kernel_end[]; /* linker symbol — true end of BSS */
 
@@ -17,6 +18,18 @@ static phys_addr_t g_pml4_phys;
 static virt_addr_t g_guard_page_addr;
 static virt_addr_t g_slab_heap_cursor = KERNEL_HEAP_BASE;
 static bool g_sasos_active = false;
+static bool g_nx_supported = false;
+
+bool vmm_nx_supported(void) { return g_nx_supported; }
+
+/* Section-boundary symbols provided by linker script */
+extern char __text_start[];
+extern char __text_end[];
+extern char __rodata_start[];
+extern char __rodata_end[];
+extern char __data_start[];
+extern char __kernel_end[];    /* covers .data + .bss */
+extern char kernel_stack_bottom[];
 
 static inline void *phys_to_virt_vmm(phys_addr_t phys) {
   if (g_sasos_active)
@@ -124,6 +137,26 @@ virt_addr_t vmm_heap_alloc_page(void) {
   return va;
 }
 
+/**
+ * @brief Check if a physical range overlaps any MMIO or Reserved region.
+ *
+ * Used by the direct-map builder to skip 2 MiB huge-page entries that
+ * overlap device MMIO regions. Those regions must be mapped explicitly
+ * by drivers with UC (uncacheable) attributes via mmio_map_bar().
+ */
+static bool phys_range_is_mmio(const helios_mem_entry_t *entries,
+                                uint64_t count,
+                                phys_addr_t base, uint64_t size) {
+    phys_addr_t end = base + size;
+    for (uint64_t i = 0; i < count; i++) {
+        uint32_t t = entries[i].type;
+        if (t != HELIOS_MEM_MMIO && t != HELIOS_MEM_RESERVED) continue;
+        phys_addr_t r_end = entries[i].phys_base + entries[i].page_count * PAGE_SIZE;
+        if (entries[i].phys_base < end && r_end > base) return true;
+    }
+    return false;
+}
+
 void vmm_init_sasos(boot_info_t *boot_info) {
   phys_addr_t kernel_phys = boot_info->kernel.phys_base;
 
@@ -134,37 +167,57 @@ void vmm_init_sasos(boot_info_t *boot_info) {
   /* The NX bit (bit 63) in PTEs is a RESERVED bit unless EFER.NXE is set.
    * Setting a reserved PTE bit causes #PF when the CPU walks the entry.
    * We must enable NXE first, then conditionally use PTE_NO_EXECUTE. */
-  bool nx_supported = false;
   {
     cpuid_result_t ext = cpuid(0x80000001);
     if (ext.edx & (1u << 20)) {
       uint64_t efer = rdmsr(MSR_IA32_EFER);
       efer |= EFER_NXE;
       wrmsr(MSR_IA32_EFER, efer);
-      nx_supported = true;
+      g_nx_supported = true;
       serial_puts("  VMM: NX (EFER.NXE) enabled\n");
     } else {
       serial_puts("  VMM: NX not supported by CPU\n");
     }
   }
 
-  /* Map kernel at KERNEL_VMA.
-   * Use __kernel_end (linker symbol past .bss) not boot_info->kernel.size
-   * (flat binary file size) — BSS is SHT_NOBITS and contributes 0 bytes to
-   * the file but is very much present in memory (g_idt, kernel stack, etc). */
-  uint64_t kernel_total = (uint64_t)__kernel_end - (uint64_t)KERNEL_VMA;
-  uint64_t kernel_pages = (kernel_total + PAGE_SIZE - 1) / PAGE_SIZE;
-  uint64_t kernel_flags = PTE_PRESENT | PTE_WRITABLE | PTE_GLOBAL;
+  /* Map kernel with W^X per-section protection.
+   * Use linker symbols for section boundaries.
+   * Compute phys = kernel_phys + (section_va - KERNEL_VMA) for each region. */
+  uint64_t text_flags = PTE_PRESENT | PTE_GLOBAL;
+  uint64_t rodata_flags = PTE_PRESENT | PTE_GLOBAL |
+                          (g_nx_supported ? PTE_NO_EXECUTE : 0);
+  uint64_t data_flags = PTE_PRESENT | PTE_WRITABLE | PTE_GLOBAL |
+                        (g_nx_supported ? PTE_NO_EXECUTE : 0);
 
-  for (uint64_t i = 0; i < kernel_pages; i++)
-    vmm_map_page(KERNEL_VMA + i * PAGE_SIZE, kernel_phys + i * PAGE_SIZE,
-                 kernel_flags);
+  /* .text — executable, not writable */
+  uint64_t text_size = (uint64_t)__text_end - (uint64_t)__text_start;
+  vmm_map_range((virt_addr_t)__text_start,
+                kernel_phys + ((uint64_t)__text_start - KERNEL_VMA),
+                text_size, text_flags);
+  serial_printf("  VMM: .text   [%p, %p) RX\n", __text_start, __text_end);
 
-  serial_printf("  VMM: kernel mapped %lu pages at KERNEL_VMA 0x%lx\n",
+  /* .rodata — not writable, NX if available */
+  uint64_t rodata_size = (uint64_t)__data_start - (uint64_t)__rodata_start;
+  vmm_map_range((virt_addr_t)__rodata_start,
+                kernel_phys + ((uint64_t)__rodata_start - KERNEL_VMA),
+                rodata_size, rodata_flags);
+  serial_printf("  VMM: .rodata [%p, %p) R%s\n", __rodata_start, __data_start,
+                g_nx_supported ? "+NX" : "");
+
+  /* .data + .bss + stack — writable, NX if available */
+  uint64_t data_size = (uint64_t)__kernel_end - (uint64_t)__data_start;
+  vmm_map_range((virt_addr_t)__data_start,
+                kernel_phys + ((uint64_t)__data_start - KERNEL_VMA),
+                data_size, data_flags);
+  serial_printf("  VMM: .data   [%p, %p) RW%s\n", __data_start, __kernel_end,
+                g_nx_supported ? "+NX" : "");
+
+  uint64_t kernel_pages = ((uint64_t)__kernel_end - KERNEL_VMA + PAGE_SIZE - 1) / PAGE_SIZE;
+  serial_printf("  VMM: kernel mapped %lu pages at KERNEL_VMA 0x%lx (W^X)\n",
                 kernel_pages, (uint64_t)KERNEL_VMA);
 
   /* Physical direct map — 2 MiB huge pages up to top of RAM.
-   * Skip RESERVED/MMIO regions at very high addresses. */
+   * Skip MMIO/Reserved regions — those are mapped by drivers with UC. */
   helios_mem_entry_t *entries =
       (helios_mem_entry_t *)(uintptr_t)boot_info->memory_map.entries_phys;
   uint64_t entry_count = boot_info->memory_map.entry_count;
@@ -187,7 +240,7 @@ void vmm_init_sasos(boot_info_t *boot_info) {
   uint64_t huge_page_count = total_phys_mem / PAGE_SIZE_2M;
   uint64_t direct_flags =
       PTE_PRESENT | PTE_WRITABLE | PTE_GLOBAL | PTE_HUGE_PAGE;
-  if (nx_supported) {
+  if (g_nx_supported) {
     direct_flags |= PTE_NO_EXECUTE;
   }
 
@@ -196,6 +249,7 @@ void vmm_init_sasos(boot_info_t *boot_info) {
 
   for (uint64_t i = 0; i < huge_page_count; i++) {
     phys_addr_t pa = i * PAGE_SIZE_2M;
+    if (phys_range_is_mmio(entries, entry_count, pa, PAGE_SIZE_2M)) continue;
     virt_addr_t va = KERNEL_PHYS_MAP_BASE + pa;
 
     phys_addr_t pdpt_phys =
@@ -267,8 +321,26 @@ void vmm_init_sasos(boot_info_t *boot_info) {
     }
   }
 
-  /* Guard page below kernel stack */
-  g_guard_page_addr = (virt_addr_t)kernel_stack_bottom - PAGE_SIZE;
+  /* Guard page below kernel stack.
+   *
+   * kernel_stack_guard is an explicitly reserved 4 KiB region in .bss
+   * (see entry.asm) placed immediately below kernel_stack_bottom. This
+   * is deliberately NOT computed as "kernel_stack_bottom - PAGE_SIZE":
+   * that expression is only as safe as whatever the linker happens to
+   * place there, and once .data/.bss held live content (e.g. panic.c's
+   * __stack_chk_guard) it silently unmapped that content instead of an
+   * empty page, corrupting the stack-protector canary and turning every
+   * subsequent protected function call into a fresh page fault.
+   *
+   * The assertion below fails fast (at boot, on serial) if the two
+   * symbols ever drift apart instead of silently unmapping the wrong
+   * page again. */
+  if ((virt_addr_t)kernel_stack_guard + PAGE_SIZE != (virt_addr_t)kernel_stack_bottom) {
+    panic("VMM: kernel_stack_guard is not immediately below kernel_stack_bottom");
+  }
+
+  g_guard_page_addr = (virt_addr_t)kernel_stack_guard;
   vmm_unmap_page(g_guard_page_addr);
-  serial_printf("  VMM: guard page at 0x%lx\n", g_guard_page_addr);
+  serial_printf("  VMM: guard page at 0x%lx (reserved, below kernel stack)\n",
+                g_guard_page_addr);
 }
